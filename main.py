@@ -57,7 +57,6 @@ def g2t_check(x):
 def prep_data(config, vocab_only=False, proc_id=-1):
     train_raw = json.load(open(config['train_file'], 'r'))
     max_len = sorted([len(x['text'].split()) for x in train_raw])[int(0.95*len(train_raw))]
-    logging.info('MAX_LEN {0:}'.format(max_len))
     train_raw = [x for x in train_raw if len(x['text'].split())<max_len]
     train_raw = train_raw[:int(len(train_raw)*config['split'])]
     
@@ -69,12 +68,13 @@ def prep_data(config, vocab_only=False, proc_id=-1):
         vocab = scan_data(test_raw, vocab, sp=True)
         for v in vocab.values():
             v.build()
-            logging.info('{0:} {1:}'.format(len(v), len(v.sp)))
+            logging.info('Vocab Size {0:}, detached by test set {1:}'.format(len(v), len(v.sp)))
         if vocab_only:
             return vocab
     else:
         vocab = torch.load('tmp_vocab.pt')['vocab']
 
+    logging.info('MAX_LEN {0:}'.format(max_len))
     pool = DataPool()
     _raw = []
     for x in train_raw:
@@ -147,6 +147,7 @@ def _g2s(x):
     return str(x.nodes()) + str(x.edges())
 
 def eval_g2t(pool, _type, vocab, model, config):
+    logging.info('Eval on {0:}'.format(_type))
     hyp = []
     ref = []
     ref3 = []
@@ -195,7 +196,7 @@ def eval_g2t(pool, _type, vocab, model, config):
         ref = dict(zip(range(len(ref)), ref))
         ret = bleu.compute_score(ref, hyp)
         logging.info('BLEU INP {0:}'.format(len(hyp)))
-        logging.info('BLEU {0:}'.format(ret[0]))
+        logging.info('BLEU 1-4 {0:}'.format(ret[0]))
         ret = ret[0][-1]
         logging.info('METEOR {0:}'.format(meteor.compute_score(ref, hyp)[0]))
         logging.info('ROUGE_L {0:}'.format(rouge.compute_score(ref, hyp)[0]))
@@ -259,6 +260,7 @@ def double_list(x):
     return _x+_x
 
 def eval_t2g(pool, _type, vocab, model, config):
+    logging.info('Eval on {0:}'.format(_type))
     hyp = []
     ref = []
     pos_label = []
