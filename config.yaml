@@ -1,0 +1,43 @@
+#config file
+#G2T
+g2t:
+    nhid: 512
+    nhead: 4
+    head_dim: 128
+    weight_decay: 0.0
+    prop: 2
+    title: False
+    batch_size: 32
+    beam_size: 5
+    beam_max_len: 50
+    enc_lstm_layers: 2
+    lr: 2.0e-4
+    clip: 1.0
+    emb_drop: 0.0
+    attn_drop: 0.1
+    drop: 0.1
+    lp: 1.0
+    graph_enc: "gtrans"
+    gpu: 0
+    save: "g2t_modelf1.pt"
+t2g:
+    batch_size: 32
+    lr: 5.0e-5
+    drop: 0.0
+    clip: 1.0
+    gpu: 0
+    save: "t2g_modelf1.pt"
+    weight_decay: 0.0
+
+main:
+    lr: 1.0e-5
+    gpus: 1
+    split: 1.1 
+    epoch: 50
+    pre_epoch: 10 
+    seed: 654321 
+    batch_size: 32
+    train_file: "train.json"
+    dev_file: "dev.json"
+    test_file: "test.json"
+    mode: "warm_unsup" #['sup', 'cold_unsup', 'warm_unsup']
