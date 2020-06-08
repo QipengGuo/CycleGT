@@ -163,8 +163,8 @@ def eval_g2t(pool, _type, vocab, model, config):
             with torch.no_grad():
                 batch = batch2tensor_g2t(_batch, config['device'], vocab )
                 seq = model(batch, beam_size=config['beam_size'])
-            r, _cr = write_txt(batch, batch['tgt'], vocab['text'])
-            h, _ch = write_txt(batch, seq, vocab['text'])
+            r = write_txt(batch, batch['tgt'], vocab['text'])
+            h = write_txt(batch, seq, vocab['text'])
             _same.extend([_g2s(x['graph'])+str(x['ent_text']) for x in _batch])
             hyp.extend(h)
             ref.extend(r)
