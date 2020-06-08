@@ -146,7 +146,7 @@ def train_t2g_one_step(batch, model, optimizer, config, accum=False, t2g_weight=
 def _g2s(x):
     return str(x.nodes()) + str(x.edges())
 
-def eval_g2t(pool, _type, vocab, model, config):
+def eval_g2t(pool, _type, vocab, model, config, display=True):
     logging.info('Eval on {0:}'.format(_type))
     hyp = []
     ref = []
@@ -159,7 +159,7 @@ def eval_g2t(pool, _type, vocab, model, config):
     unq_ent = {}
     batch_size = 8*config['batch_size']
     tot = (pool.get_len(_type)+batch_size-1)//batch_size
-    with tqdm.tqdm(pool.draw_with_type(batch_size, False, _type), total=tot) as tqb:
+    with tqdm.tqdm(pool.draw_with_type(batch_size, False, _type), total=tot, disable=False if display else True) as tqb:
         for i, _batch in enumerate(tqb):
             with torch.no_grad():
                 batch = batch2tensor_g2t(_batch, config['device'], vocab )
@@ -259,7 +259,7 @@ def double_list(x):
     _x = list(x)
     return _x+_x
 
-def eval_t2g(pool, _type, vocab, model, config):
+def eval_t2g(pool, _type, vocab, model, config, display=True):
     logging.info('Eval on {0:}'.format(_type))
     hyp = []
     ref = []
@@ -267,7 +267,7 @@ def eval_t2g(pool, _type, vocab, model, config):
     model.eval()
     tot = (pool.get_len(_type)+config['batch_size']-1)//config['batch_size']
     wf = open('t2g_show.txt', 'w')
-    with tqdm.tqdm(pool.draw_with_type(config['batch_size'], False, _type), total=tot) as tqb: 
+    with tqdm.tqdm(pool.draw_with_type(config['batch_size'], False, _type), total=tot, disable=False if display else True) as tqb: 
         for i, _batch in enumerate(tqb):
             with torch.no_grad():
                 batch = batch2tensor_t2g(_batch, config['device'], vocab)
@@ -368,7 +368,7 @@ def train(_type, config):
 
         data_list = list(zip(_data_g2t, _data_t2g))
         _data = data_list
-        with tqdm.tqdm(_data) as tqb:
+        with tqdm.tqdm(_data, disable=True if not config['main']['display'] else False) as tqb:
             for j, (batch_g2t, batch_t2g) in enumerate(tqb):
                 if i<config['main']['pre_epoch'] and config['main']['mode']=='warm_unsup':
                     model_g2t.blind = True
@@ -435,13 +435,13 @@ def train(_type, config):
                 model_g2t.blind = False
                 model_t2g.blind = False
             if model_t2g.blind:
-                e = eval_t2g(pool, 'dev_t2g_blind', vocab, model_t2g, config['t2g'])
+                e = eval_t2g(pool, 'dev_t2g_blind', vocab, model_t2g, config['t2g'], display=config['main']['display'])
             else:
-                e = eval_t2g(pool, 'dev', vocab, model_t2g, config['t2g'])
+                e = eval_t2g(pool, 'dev', vocab, model_t2g, config['t2g'], display=config['main']['display'])
             if e > best_t2g:
                 best_t2g = max(best_t2g, e)
                 torch.save(model_t2g.state_dict(), config['t2g']['save']+'X'+'best')
-            e = eval_g2t(pool, 'dev', vocab, model_g2t, config['g2t'])
+            e = eval_g2t(pool, 'dev', vocab, model_g2t, config['g2t'], display=config['main']['display'])
             if e > best_g2t:
                 best_g2t = max(best_g2t, e)
                 torch.save(model_g2t.state_dict(), config['g2t']['save']+'X'+'best')
@@ -450,9 +450,33 @@ def train(_type, config):
                 torch.save(model_g2t.state_dict(), config['g2t']['save']+'X'+'mid')
     model_g2t.load_state_dict(torch.load(config['g2t']['save']+'X'+'best'))
     model_t2g.load_state_dict(torch.load(config['t2g']['save']+'X'+'best'))
+    logging.info('Final Test mode {0:}'.format(config['main']['mode']))
     e = eval_t2g(pool, 'test', vocab, model_t2g, config['t2g'])
     e = eval_g2t(pool, 'test', vocab, model_g2t, config['g2t'])
 
+def multi_run():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--config', type=str, default='config.yaml')
+    args = parser.parse_args()
+    for i in range(100): #100 trials
+        config = yaml.load(open(args.config, 'r'))
+        config['main']['seed'] = random.randint(0,1e10)
+        config['main']['mode'] = random.choice(['sup', 'warm_unsup', 'cold_unsup'])
+        config['main']['display'] = False
+        save_str = str(random.randint(0,1e5))
+        config['g2t']['save'] += save_str
+        config['t2g']['save'] += save_str
+        _config = copy.deepcopy(config)
+        random.seed(config['main']['seed'])
+        torch.manual_seed(config['main']['seed'])
+        np.random.seed(config['main']['seed'])
+        torch.cuda.manual_seed_all(config['main']['seed'])
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+
+        vocab= prep_data(config['main'], True)
+        torch.save({'vocab':vocab}, 'tmp_vocab.pt')
+        train('train', config)
 
 def main():
     parser = argparse.ArgumentParser()
@@ -473,3 +497,4 @@ def main():
 
 if __name__=='__main__':
     main()
+    #multi_run()
