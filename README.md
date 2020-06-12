@@ -35,7 +35,7 @@ For example,
 "text": "<ENT_0> is served by the <ENT_1> .", 
 "entities": [["Abilene", ",", "Texas"], ["Abilene", "Regional", "Airport"]]}
 ```
-BTW, we don't tokenize the text, so make sure that the entity and text have been tokenized in the list format.
+BTW, we don't tokenize the text, so make sure that the entity and text have been tokenized.
 
 ## Citing CycleGT
 
