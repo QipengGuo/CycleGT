@@ -32,26 +32,6 @@ cider = Cider()
 def fake_sent(x):
     return ' '.join(['<ENT_{0:}>'.format(xx) for xx in range(len(x))])
 
-def double_list(x):
-    _x = list(x)
-    return _x+_x
-
-def g2t_check(x):
-    ent = []
-    for tok in x['text'].split():
-        if tok[:4]=='<ENT':
-            t = int(tok.split('_')[1][:-1])
-            ent.append(t)
-    if len(ent)<1:
-        return False
-    max_ent = max(ent)
-    if len(x['entities'])<=max_ent:
-        return False
-    for k in range(max_ent):
-        if k not in ent:
-            return False
-    return True
-
 def prep_data(config, load=""):
     #prep data always has two steps, build the vocabulary first and then generate data samples
     train_raw = json.load(open(config['train_file'], 'r'))
