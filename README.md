@@ -16,12 +16,26 @@ Feel free to change [config.yaml](config.yaml) to set other configurations.
 
 
 
-## Results on WebNLG
+### Results on WebNLG
 |Method| BLEU | Micro F1 | Macro F1|
 |-|-|-|-|
 |Back Translation w/ warmup| 43.08+-0.39| 62.3+-0.2 | 52.1+-0.3|
 |Back Translation w/o warmup| 44.97+-0.66| 61.6+-0.2 | 51.4+-0.2|
 |Supervised | 44.88+-0.66| 61.0+-0.3| 51.0+-0.3|
+
+### Training on new data  
+Preparing the data in json format and replace the file path in the config.yaml  
+And there are some constraints:
+ - entity mentions, we use the symbol like <ENT_0> to represent an entity in the text, and its surface form should list in the "entities" field.
+ - all the nodes in the graph should be mentioned in "entities"
+ 
+For example, 
+``` 
+{"relations": [[["Abilene", "Regional", "Airport"], "cityServed", ["Abilene", ",", "Texas"]]], 
+"text": "<ENT_0> is served by the <ENT_1> .", 
+"entities": [["Abilene", ",", "Texas"], ["Abilene", "Regional", "Airport"]]}
+```
+BTW, we don't tokenize the text, so make sure that the entity and text have been tokenized in the list format.
 
 ## Citing CycleGT
 
