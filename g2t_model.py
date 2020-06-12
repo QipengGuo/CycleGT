@@ -13,7 +13,7 @@ import torch.utils.data
 def replace_ent(x, ent, V, emb):
     # replace the entity
     mask = (x>=V).float()
-    _x = emb((x*(1.-mask) + 3 * mask ).long())
+    _x = emb((x*(1.-mask) + 3 * mask ).long()) # 3 is <UNK>
     if mask.sum()==0:
         return _x
     idx = ((x-V)*mask + 0 * (1.-mask)).long()
@@ -27,20 +27,20 @@ def len2mask(lens, device):
 
 class MSA(nn.Module):
     # Multi-head Self Attention
-    def __init__(self, args, mode='normal'):
+    def __init__(self, config, mode='normal'):
         super(MSA, self).__init__()
         if mode=='copy':
-            nhead, head_dim = 1, args.nhid
-            qninp, kninp = args.dec_ninp, args.nhid
+            nhead, head_dim = 1, config['nhid']
+            qninp, kninp = config['dec_ninp'], config['nhid']
         if mode=='normal':
-            nhead, head_dim = args.nhead, args.head_dim
-            qninp, kninp = args.nhid, args.nhid
+            nhead, head_dim = config['nhead'], config['head_dim']
+            qninp, kninp = config['nhid'], config['nhid']
         self.attn_drop = nn.Dropout(0.1)
         self.WQ = nn.Linear(qninp, nhead*head_dim, bias=True if mode=='copy' else False)
         if mode!='copy':
             self.WK = nn.Linear(kninp, nhead*head_dim, bias=False)
             self.WV = nn.Linear(kninp, nhead*head_dim, bias=False)
-        self.args, self.nhead, self.head_dim, self.mode = args, nhead, head_dim, mode
+        self.config, self.nhead, self.head_dim, self.mode = config, nhead, head_dim, mode
 
     def forward(self, inp1, inp2, mask=None):
         B, L2, H = inp2.shape
@@ -71,23 +71,21 @@ class MSA(nn.Module):
 
 class BiLSTM(nn.Module):
     # for entity encoding
-    def __init__(self, args, enc_type='title'):
+    def __init__(self, config):
         super(BiLSTM, self).__init__()
-        self.enc_type = enc_type
-        self.drop = nn.Dropout(args.emb_drop)
-        self.bilstm = nn.LSTM(args.nhid, args.nhid//2, bidirectional=True, \
-                num_layers=args.enc_lstm_layers, batch_first=True)
+        self.drop = nn.Dropout(config['emb_drop'])
+        self.bilstm = nn.LSTM(config['nhid'], config['nhid']//2, bidirectional=True, \
+                num_layers=config['enc_lstm_layers'], batch_first=True)
  
     def forward(self, inp, mask, ent_len=None):
         inp = self.drop(inp)
         lens = (mask==0).sum(-1).long().tolist()
         pad_seq = pack_padded_sequence(inp, lens, batch_first=True, enforce_sorted=False)
         y, (_h, _c) = self.bilstm(pad_seq)
-        if self.enc_type=='entity':
-            _h = _h.transpose(0,1).contiguous()
-            _h = _h[:,-2:].view(_h.size(0), -1) # two directions of the top-layer
-            ret = pad(_h.split(ent_len), out_type='tensor')
-            return ret
+        _h = _h.transpose(0,1).contiguous()
+        _h = _h[:,-2:].view(_h.size(0), -1) # two directions of the top-layer
+        ret = pad(_h.split(ent_len), out_type='tensor')
+        return ret
 
 class GAT(nn.Module):
     # a graph attention network with dot-product attention
@@ -105,7 +103,7 @@ class GAT(nn.Module):
         self.q_proj = nn.Linear(in_feats, num_heads*out_feats, bias=False)
         self.k_proj = nn.Linear(in_feats, num_heads*out_feats, bias=False)
         self.v_proj = nn.Linear(in_feats, num_heads*out_feats, bias=False)
-        self.attn_drop = nn.Dropout(0.1)
+        self.attn_drop = nn.Dropout(attn_drop)
         self.ln1 = nn.LayerNorm(in_feats)
         self.ln2 = nn.LayerNorm(in_feats)
         if trans:
@@ -113,9 +111,9 @@ class GAT(nn.Module):
                 nn.Linear(in_feats, 4*in_feats),
                 nn.PReLU(4*in_feats),
                 nn.Linear(4*in_feats, in_feats),
-                nn.Dropout(0.1),
+                nn.Dropout(ffn_drop),
             )
-            # a strange FFN
+            # I know it's a strange FFN
         self._trans = trans
 
     def forward(self, graph, feat):
@@ -143,15 +141,15 @@ class GAT(nn.Module):
         return rst
 
 class GraphTrans(nn.Module):
-    def __init__(self,args):
+    def __init__(self,config):
         super().__init__()
-        self.args = args
-        if args.graph_enc == "gat":
+        self.config = config
+        if config['graph_enc'] == "gat":
             # we only support gtrans, don't use this one
-            self.gat = nn.ModuleList([GAT(args.nhid, args.nhid//4, 4, attn_drop=args.attn_drop, trans=False) for _ in range(args.prop)]) #untested
+            self.gat = nn.ModuleList([GAT(config['nhid'], config['nhid']//4, 4, attn_drop=config['attn_drop'], trans=False) for _ in range(config['prop'])])
         else:
-            self.gat = nn.ModuleList([GAT(args.nhid, args.nhid//4, 4, attn_drop=args.attn_drop, ffn_drop=args.drop, trans=True) for _ in range(args.prop)])
-        self.prop = args.prop
+            self.gat = nn.ModuleList([GAT(config['nhid'], config['nhid']//4, 4, attn_drop=config['attn_drop'], ffn_drop=config['drop'], trans=True) for _ in range(config['prop'])])
+        self.prop = config['prop']
 
     def forward(self, ent, ent_mask, ent_len, rel, rel_mask, graphs):
         device = ent.device
@@ -188,30 +186,29 @@ def fn_sum(n1, n2):
         return {n2: node_batch.mailbox[n1].sum(1)}
     return func          
 class GraphWriter(nn.Module):
-    def __init__(self, args, vocab_pack=None):
+    def __init__(self, config, vocab_pack=None):
         super(GraphWriter, self).__init__()
         if vocab_pack is not None:
-            args.rel_vocab = vocab_pack['relation']
-            args.text_vocab = vocab_pack['text']
-            args.ent_text_vocab = vocab_pack['entity']
+            self.rel_vocab = vocab_pack['relation']
+            self.text_vocab = vocab_pack['text']
+            self.ent_text_vocab = vocab_pack['entity']
 
-        args.dec_ninp = args.nhid * 2
-        self.text_vocab_len = len(args.text_vocab) # to fix this length
-        self.args = args
-        self.ent_emb = nn.Embedding(len(args.ent_text_vocab), args.nhid, padding_idx=0)
-        self.tar_emb = nn.Embedding(self.text_vocab_len, args.nhid, padding_idx=0)
+        config['dec_ninp'] = config['nhid'] * 2
+        self.config = config
+        self.ent_emb = nn.Embedding(len(self.ent_text_vocab), config['nhid'], padding_idx=0)
+        self.tar_emb = nn.Embedding(len(self.text_vocab), config['nhid'], padding_idx=0)
         nn.init.xavier_normal_(self.ent_emb.weight)
-        self.rel_emb = nn.Embedding(len(args.rel_vocab), args.nhid, padding_idx=0)
+        self.rel_emb = nn.Embedding(len(self.rel_vocab), config['nhid'], padding_idx=0)
         nn.init.xavier_normal_(self.rel_emb.weight)
-        self.decode_lstm = nn.LSTMCell(args.dec_ninp, args.nhid)
-        self.ent_enc = BiLSTM(args, enc_type='entity')
-        self.graph_enc = GraphTrans(args)
-        self.ent_attn = MSA(args)
-        self.copy_attn = MSA(args, mode='copy')
+        self.decode_lstm = nn.LSTMCell(config['dec_ninp'], config['nhid'])
+        self.ent_enc = BiLSTM(config)
+        self.graph_enc = GraphTrans(config)
+        self.ent_attn = MSA(config)
+        self.copy_attn = MSA(config, mode='copy')
         self.blind = False
-        self.copy_fc = nn.Linear(args.dec_ninp, 1)
-        self.pred_v_fc = nn.Linear(args.dec_ninp, self.text_vocab_len)
-        self.ln = nn.LayerNorm(args.nhid)
+        self.copy_fc = nn.Linear(config['dec_ninp'], 1)
+        self.pred_v_fc = nn.Linear(config['dec_ninp'], len(self.text_vocab))
+        self.ln = nn.LayerNorm(config['nhid'])
 
     def enc_forward(self, batch, ent_mask, ent_text_mask, ent_len, rel_mask):
         ent_enc = self.ent_enc(self.ent_emb(batch['ent_text']), ent_text_mask, ent_len = batch['ent_len'])
@@ -223,7 +220,7 @@ class GraphWriter(nn.Module):
         return self.ln(g_ent), g_root, ent_enc
 
     def forward(self, batch, beam_size=-1):
-        # three modes, beam_size==-1 means training, beam_size==1 means greedy decoding, beam_size>1 means beam search
+        # three modes, beam_size==-1 means training, beam_size==1 means greedy decoding, and beam_size>1 means beam search
         ent_mask = len2mask(batch['ent_len'], batch['ent_text'].device)
         ent_text_mask = batch['ent_text']==0
 
@@ -235,10 +232,10 @@ class GraphWriter(nn.Module):
         if beam_size<1:
             # training
             outs = []
-            _mask = (batch['text']>=len(self.args.text_vocab)).long()
+            _mask = (batch['text']>=len(self.text_vocab)).long()
             _inp = _mask * 3 + (1.-_mask) * batch['text'] # 3 is <UNK> 
             tar_inp = self.tar_emb(_inp.long())
-            tar_inp = (1.-_mask[:,:,None]) * tar_inp +  ent_enc[torch.arange(len(batch['text']))[:,None].cuda(),((batch['text']-len(self.args.text_vocab)) * _mask ).long()] * _mask[:,:,None]
+            tar_inp = (1.-_mask[:,:,None]) * tar_inp +  ent_enc[torch.arange(len(batch['text']))[:,None].cuda(),((batch['text']-len(self.text_vocab)) * _mask ).long()] * _mask[:,:,None]
 
             tar_inp = tar_inp.transpose(0,1)
             for t, xt in enumerate(tar_inp):
@@ -259,10 +256,10 @@ class GraphWriter(nn.Module):
                 # greedy
                 device = g_ent.device
                 B = g_ent.shape[0]
-                seq = (torch.ones(B,).long().to(device) * self.args.text_vocab('<BOS>')).unsqueeze(1)
-                for t in range(self.args.beam_max_len):
+                seq = (torch.ones(B,).long().to(device) * self.text_vocab('<BOS>')).unsqueeze(1)
+                for t in range(self.config['beam_max_len']):
                     _inp = seq[:,-1]
-                    xt = replace_ent(seq[:,-1], ent_enc, len(self.args.text_vocab), self.tar_emb)
+                    xt = replace_ent(seq[:,-1], ent_enc, len(self.text_vocab), self.tar_emb)
                     _xt = torch.cat([ctx, xt], 1)
                     _h, _c = self.decode_lstm(_xt, (_h, _c))
                     ctx = _h + self.ent_attn(_h, g_ent, mask=ent_mask)
@@ -272,10 +269,10 @@ class GraphWriter(nn.Module):
                     pred_c = torch.log((1. - copy_gate)) + torch.log_softmax(self.copy_attn(_y.unsqueeze(1), ent_enc, mask=ent_mask).squeeze(1), -1)
                     pred = torch.cat([pred_v, pred_c], -1).view(B,-1)
                     for ban_item in ['<BOS>', '<PAD>', '<UNK>']:
-                        pred[:, self.args.text_vocab(ban_item)] = -1e8
+                        pred[:, self.text_vocab(ban_item)] = -1e8
                     _, word = pred.max(-1)
                     seq = torch.cat([seq, word.unsqueeze(1)], 1)
-                    eos_idx = self.args.text_vocab('<EOS>')
+                    eos_idx = self.text_vocab('<EOS>')
                     if ((seq==eos_idx).float().max(-1)[0]==1).all():
                         break
                 return seq
@@ -292,14 +289,14 @@ class GraphWriter(nn.Module):
                 ent_enc = ent_enc.view(B, 1, ent_enc.size(1), -1).repeat(1, beam_size, 1, 1).view(BSZ, ent_enc.size(1), -1)
 
                 beam_best = torch.zeros(B).to(device) - 1e9
-                beam_seq = (torch.ones(B, beam_size).long().to(device) * self.args.text_vocab('<BOS>')).unsqueeze(-1)
+                beam_seq = (torch.ones(B, beam_size).long().to(device) * self.text_vocab('<BOS>')).unsqueeze(-1)
                 beam_best_seq = torch.zeros(B,1).long().to(device)
                 beam_score = torch.zeros(B, beam_size).to(device)
                 done_flag = torch.zeros(B, beam_size).to(device)
-                for t in range(self.args.beam_max_len):
+                for t in range(self.config['beam_max_len']):
                     _inp = beam_seq[:,:,-1].view(-1)
-                    _mask = (_inp>=len(self.args.text_vocab)).long()
-                    xt = replace_ent(beam_seq[:,:,-1].view(-1), ent_enc, len(self.args.text_vocab), self.tar_emb)
+                    _mask = (_inp>=len(self.text_vocab)).long()
+                    xt = replace_ent(beam_seq[:,:,-1].view(-1), ent_enc, len(self.text_vocab), self.tar_emb)
                     _xt = torch.cat([ctx, xt], 1)
                     _h, _c = self.decode_lstm(_xt, (_h, _c))
                     ctx = _h + self.ent_attn(_h, g_ent, mask=ent_mask)
@@ -309,22 +306,22 @@ class GraphWriter(nn.Module):
                     pred_c = torch.log((1. - copy_gate)) + torch.log_softmax(self.copy_attn(_y.unsqueeze(1), ent_enc, mask=ent_mask).squeeze(1), -1)
                     pred = torch.cat([pred_v, pred_c], -1).view(B, beam_size, -1)
                     for ban_item in ['<BOS>', '<PAD>', '<UNK>']:
-                        pred[:, :, self.args.text_vocab(ban_item)] = -1e8
-                    if t==self.args.beam_max_len-1: # force ending 
-                        tt = pred[:, :, self.args.text_vocab('<EOS>')]
+                        pred[:, :, self.text_vocab(ban_item)] = -1e8
+                    if t==self.config['beam_max_len']-1: # force ending 
+                        tt = pred[:, :, self.text_vocab('<EOS>')]
                         pred = pred*0-1e8
-                        pred[:, :, self.args.text_vocab('<EOS>')] = tt
+                        pred[:, :, self.text_vocab('<EOS>')] = tt
                     cum_score = beam_score.view(B,beam_size,1) + pred
                     score, word = cum_score.topk(dim=-1, k=beam_size) # B, beam_size, beam_size
                     score, word = score.view(B,-1), word.view(B,-1)
-                    eos_idx = self.args.text_vocab('<EOS>')
+                    eos_idx = self.text_vocab('<EOS>')
                     if beam_seq.size(2)==1:
                         new_idx = torch.arange(beam_size).to(device)
                         new_idx = new_idx[None,:].repeat(B,1)
                     else:
                         _, new_idx = score.topk(dim=-1, k=beam_size)
                     new_src, new_score, new_word, new_done = [], [], [], []
-                    LP = beam_seq.size(2) ** self.args.lp
+                    LP = beam_seq.size(2) ** self.config['lp'] # length penalty
                     prefix_idx = torch.arange(B).to(device)[:,None]
                     new_word = word[prefix_idx, new_idx]
                     new_score = score[prefix_idx, new_idx]

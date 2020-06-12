@@ -1,40 +1,36 @@
 #config file
 #G2T
 g2t:
-    nhid: 512
-    nhead: 4
-    head_dim: 128
-    weight_decay: 0.0
-    prop: 2
-    title: False
+    nhid: 512 # number of hidden units
+    nhead: 4 # number of attention heads
+    head_dim: 128 # dim of each attention head
+    weight_decay: 0.0 
+    prop: 2 # number of layers of GAT
     batch_size: 32
     beam_size: 5
     beam_max_len: 50
     enc_lstm_layers: 2
     lr: 2.0e-4
-    clip: 1.0
+    clip: 1.0 # gradient clipping
     emb_drop: 0.0
     attn_drop: 0.1
-    drop: 0.1
-    lp: 1.0
+    drop: 0.1 # FFN dropout
+    lp: 1.0 # length penalty
     graph_enc: "gtrans"
-    gpu: 0
     save: "g2t_model.pt"
 t2g:
     batch_size: 32
+    nhid: 512 # number of hidden units
     lr: 5.0e-5
     drop: 0.0
     clip: 1.0
-    gpu: 0
     save: "t2g_model.pt"
     weight_decay: 0.0
 
 main:
-    lr: 1.0e-5
-    gpus: 1
     split: 1.1 
     epoch: 50
-    pre_epoch: 10 
+    pre_epoch: 10  # warmup epoch if using the warmup
     seed: 654321 
     batch_size: 32
     train_file: "train.json"
