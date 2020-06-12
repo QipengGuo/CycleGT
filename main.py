@@ -381,7 +381,7 @@ def multi_run():
     args = parser.parse_args()
     for i in range(100): 
         config = yaml.load(open(args.config, 'r'))
-        config['main']['seed'] = random.randint(0,1e10)
+        config['main']['seed'] = random.randint(0,1e8)
         config['main']['mode'] = random.choice(['sup', 'warm_unsup', 'cold_unsup'])
         config['main']['display'] = False
         save_str = str(random.randint(0,1e5))
