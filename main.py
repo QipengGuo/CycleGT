@@ -32,10 +32,6 @@ cider = Cider()
 def fake_sent(x):
     return ' '.join(['<ENT_{0:}>'.format(xx) for xx in range(len(x))])
 
-def _g2s(x):
-    # a hash function to distinguish different graphs
-    return str(x.nodes()) + str(x.edges())
-
 def double_list(x):
     _x = list(x)
     return _x+_x
@@ -201,17 +197,19 @@ def eval_g2t(pool, _type, vocab, model, config, display=True):
                 seq = model(batch, beam_size=config['beam_size'])
             r = write_txt(batch, batch['tgt'], vocab['text'])
             h = write_txt(batch, seq, vocab['text'])
-            _same.extend([_g2s(x['graph'])+str(x['ent_text']) for x in _batch])
+            _same.extend([str(x['raw_relation'])+str(x['ent_text']) for x in _batch])
             hyp.extend(h)
             ref.extend(r)
         hyp = [x[0] for x in hyp]
         ref = [x[0] for x in ref]
+        idxs, _same= list(zip(*sorted(enumerate(_same), key=lambda x:x[1])))
+
         ptr = 0
         for i in range(len(hyp)):
             if i>0 and _same[i]!=_same[i-1]:
                 ptr +=1
-            unq_hyp[ptr] = hyp[i]
-            unq_ref[ptr].append(ref[i])
+            unq_hyp[ptr] = hyp[idxs[i]]
+            unq_ref[ptr].append(ref[idxs[i]])
             
         max_len = max([len(ref) for ref in unq_ref.values()])
         unq_hyp = sorted(unq_hyp.items(), key=lambda x:x[0])
