@@ -18,7 +18,7 @@ from pycocoevalcap.meteor.meteor import Meteor
 
 from t2g_model import ModelLSTM
 from g2t_model import GraphWriter
-from data import write_txt, tensor2data_g2t, batch2tensor_t2g, batch2tensor_g2t, \
+from data import write_txt, tensor2data_g2t, tensor2data_t2g, batch2tensor_t2g, batch2tensor_g2t, \
     scan_data, DataPool, fill_pool
 
 import logging
