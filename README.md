@@ -5,7 +5,6 @@ This is the code repository for the paper
 
 ### Dependencies
 - pytorch 1.4.0 cu10
-- pycocoevalcap python3 version
 - `pip install -r requirements.txt`
 
 ### How to Run
