@@ -1,13 +1,9 @@
-import dgl
 import torch
 import math
-from data import *
-import dgl.function as fn
+from data import pad, NODE_TYPE
 from dgl.nn.pytorch import edge_softmax
 from torch import nn
-import torch.nn.functional as F
 from torch.nn.utils.rnn import pack_padded_sequence,pad_packed_sequence
-import numpy as np
 import torch.utils.data
 
 def replace_ent(x, ent, V, emb):

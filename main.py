@@ -8,18 +8,19 @@ import torch.nn as nn
 import torch.optim
 import torch.nn.functional as F
 import json
-from t2g_model import ModelLSTM
-from g2t_model import GraphWriter
-from data import *
 from sklearn.metrics import f1_score
 from collections import defaultdict
-import sys
-import copy 
-sys.path.append('./pycocoevalcap')
+import copy
 from pycocoevalcap.bleu.bleu import Bleu
 from pycocoevalcap.rouge.rouge import Rouge
 from pycocoevalcap.cider.cider import Cider
 from pycocoevalcap.meteor.meteor import Meteor
+
+from t2g_model import ModelLSTM
+from g2t_model import GraphWriter
+from data import write_txt, tensor2data_g2t, batch2tensor_t2g, batch2tensor_g2t, \
+    scan_data, DataPool, fill_pool
+
 
 import logging
 logging.basicConfig(level=logging.INFO)

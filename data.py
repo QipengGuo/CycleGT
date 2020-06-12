@@ -2,8 +2,6 @@ import torch
 import dgl
 import uuid
 import copy
-import numpy as np
-import json
 import random
 from transformers import BertTokenizer
 bert_type = "bert-base-uncased"

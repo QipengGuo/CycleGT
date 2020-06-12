@@ -1,8 +1,6 @@
 import torch as tc
-import logging
 import torch.nn as nn
 import torch.nn.functional as F
-import math
 
 class ModelLSTM(nn.Module):
         def __init__(self , relation_types = 7 , dropout = 0.0, d_model=768):
@@ -54,8 +52,6 @@ class ModelLSTM(nn.Module):
                                 if self.blind:
                                     s[_b, u:v] = sents[_b, u:v]
 
-                segm_index = s.new_zeros(s.size())
-                posi_index = tc.arange(n).view(1,n).expand(bs , n).to(sents.device)
                 sent_mask  = (s != 0)
 
                 encoded, _ = self.lstm(self.emb(s))
