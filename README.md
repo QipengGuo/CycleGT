@@ -3,6 +3,11 @@ This is the code repository for the paper
 
 &nbsp;&nbsp;&nbsp;&nbsp; **[CycleGT: Unsupervised Graph-to-Text and Text-to-Graph Generation via Cycle Training](https://arxiv.org/pdf/2006.04702.pdf)** 
 
+
+
+![img](img_intro.png)
+*Given a text corpus, and a graph dataset, and no parallel (text, graph) pairs, our model CycleGT aims to jointly learn text-to-graph and graph-to-text in a cycle framework.*
+
 ### Dependencies
 - pytorch 1.4.0 cu10
 - `pip install -r requirements.txt`
