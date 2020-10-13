@@ -80,12 +80,12 @@ class Vocab(object):
             self.wf[token] = self.wf.get(token, 0) + 1
             if inv:
                 self.wf[token+'_INV'] = self.wf.get(token+'_INV', 0) + 1
-                self.inv[self.wf[token]] = token+'_INV'
+                self.inv[token] = token+'_INV'
             if sp and token not in self.sp:
                 self.sp.append(token)
 
     def get_inv(self, idx):
-        return self.__call__(self.inv.get(idx, '<UNK>'))
+        return self.__call__(self.inv.get(self.i2s[idx], '<UNK>'))
 
     def build(self):
         self.i2s.extend(self.sp)
