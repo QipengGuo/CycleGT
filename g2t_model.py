@@ -180,7 +180,8 @@ def fn_u_mul_e(n1,n2,n3):
 def fn_sum(n1, n2):
     def func(node_batch):
         return {n2: node_batch.mailbox[n1].sum(1)}
-    return func          
+    return func         
+
 class GraphWriter(nn.Module):
     def __init__(self, config, vocab_pack=None):
         super(GraphWriter, self).__init__()
@@ -196,7 +197,7 @@ class GraphWriter(nn.Module):
         nn.init.xavier_normal_(self.ent_emb.weight)
         self.rel_emb = nn.Embedding(len(self.rel_vocab), config['nhid'], padding_idx=0)
         nn.init.xavier_normal_(self.rel_emb.weight)
-        self.decode_lstm = nn.LSTMCell(config['dec_ninp'], config['nhid'])
+        self.decode_lstm = nn.LSTMCell(config['dec_ninp']+config['vae_dim'], config['nhid'])
         self.ent_enc = BiLSTM(config)
         self.graph_enc = GraphTrans(config)
         self.ent_attn = MSA(config)
@@ -206,6 +207,12 @@ class GraphWriter(nn.Module):
         self.pred_v_fc = nn.Linear(config['dec_ninp'], len(self.text_vocab))
         self.ln = nn.LayerNorm(config['nhid'])
 
+        if config['vae_dim']>0:
+            self.vae_fc = nn.Linear(config['nhid'], config['vae_dim']*2) # for q(z|x)
+            self.vae_pfc = nn.Linear(config['nhid']*2, config['vae_dim']*2) # for p(z)
+            self.vae_lstm = nn.LSTM(config['nhid'], config['nhid'], batch_first=True, bidirectional=True)
+
+
     def enc_forward(self, batch, ent_mask, ent_text_mask, ent_len, rel_mask):
         ent_enc = self.ent_enc(self.ent_emb(batch['ent_text']), ent_text_mask, ent_len = batch['ent_len'])
         rel_emb = self.rel_emb(batch['rel'])
@@ -214,6 +221,17 @@ class GraphWriter(nn.Module):
         else:
             g_ent, g_root = self.graph_enc(ent_enc, ent_mask, ent_len, rel_emb, rel_mask, batch['graph'])
         return self.ln(g_ent), g_root, ent_enc
+
+    def get_vae_pz(self, inp):
+        #compute p(z), note that the p(z) is learnable
+        _z = self.vae_fc(inp)
+        return _z[:,:self.config['vae_dim']], _z[:,self.config['vae_dim']:] #mu and log_sigma
+
+    def get_vae_qz(self, inp):
+        #compute q(z|x)
+        _z, _ = self.vae_lstm(inp)
+        _z = self.vae_pfc(_z.mean(1))
+        return _z[:,:self.config['vae_dim']], _z[:,self.config['vae_dim']:]
 
     def forward(self, batch, beam_size=-1):
         # three modes, beam_size==-1 means training, beam_size==1 means greedy decoding, and beam_size>1 means beam search
@@ -225,6 +243,9 @@ class GraphWriter(nn.Module):
 
         _h, _c = g_root, g_root.clone().detach()
         ctx = _h + self.ent_attn(_h, g_ent, mask=ent_mask)
+        if self.config['vae_dim']>0:
+            pmu, plog_sigma = self.get_vae_pz(g_root)
+
         if beam_size<1:
             # training
             outs = []
@@ -232,10 +253,17 @@ class GraphWriter(nn.Module):
             _inp = _mask * 3 + (1.-_mask) * batch['text'] # 3 is <UNK> 
             tar_inp = self.tar_emb(_inp.long())
             tar_inp = (1.-_mask[:,:,None]) * tar_inp +  ent_enc[torch.arange(len(batch['text']))[:,None].cuda(),((batch['text']-len(self.text_vocab)) * _mask ).long()] * _mask[:,:,None]
+            if self.config['vae_dim']>0:
+                mu, log_sigma = self.get_vae_qz(tar_inp)
+                vae_z = torch.exp(0.5*log_sigma)*torch.randn_like(log_sigma)+mu
+            
+                kld_loss = (0.5*(log_sigma-plog_sigma-1+torch.exp(plog_sigma)/(1e-6+torch.exp(log_sigma))+(mu-pmu)**2/torch.exp(log_sigma))).sum(-1).mean()
+            else:
+                kld_loss = 0.
 
             tar_inp = tar_inp.transpose(0,1)
             for t, xt in enumerate(tar_inp):
-                _xt = torch.cat([ctx, xt], 1)
+                _xt = torch.cat([ctx, xt, vae_z], 1)
                 _h, _c = self.decode_lstm(_xt, (_h, _c))
                 ctx = _h + self.ent_attn(_h, g_ent, mask=ent_mask)
                 outs.append(torch.cat([_h, ctx], 1))
@@ -246,17 +274,18 @@ class GraphWriter(nn.Module):
             pred_v = torch.log(copy_gate+EPSI) + torch.log_softmax(self.pred_v_fc(outs), -1)
             pred_c = torch.log((1. - copy_gate)+EPSI) + torch.log_softmax(self.copy_attn(outs, ent_enc, mask=ent_mask), -1)
             pred = torch.cat([pred_v, pred_c], -1)
-            return pred, torch.exp(pred_c)
+            return pred, torch.exp(pred_c), kld_loss
         else:
             if beam_size==1:
                 # greedy
+                vae_z = torch.exp(0.5*plog_sigma)*torch.randn_like(plog_sigma)+pmu
                 device = g_ent.device
                 B = g_ent.shape[0]
                 seq = (torch.ones(B,).long().to(device) * self.text_vocab('<BOS>')).unsqueeze(1)
                 for t in range(self.config['beam_max_len']):
                     _inp = seq[:,-1]
                     xt = replace_ent(seq[:,-1], ent_enc, len(self.text_vocab), self.tar_emb)
-                    _xt = torch.cat([ctx, xt], 1)
+                    _xt = torch.cat([ctx, xt, vae_z], 1)
                     _h, _c = self.decode_lstm(_xt, (_h, _c))
                     ctx = _h + self.ent_attn(_h, g_ent, mask=ent_mask)
                     _y = torch.cat([_h, ctx], 1)
@@ -274,12 +303,14 @@ class GraphWriter(nn.Module):
                 return seq
             else:
                 # beam search
+                vae_z = torch.exp(0.5*plog_sigma)*torch.randn_like(plog_sigma)+pmu
                 device = g_ent.device
                 B = g_ent.shape[0]
                 BSZ = B * beam_size
                 _h = _h.view(B, 1, -1).repeat(1, beam_size, 1).view(BSZ, -1)
                 _c = _c.view(B, 1, -1).repeat(1, beam_size, 1).view(BSZ, -1)
                 ent_mask = ent_mask.view(B, 1, -1).repeat(1, beam_size, 1).view(BSZ, -1)
+                vae_z = vae_z.view(B, 1, -1).repeat(1, beam_size, 1).view(BSZ, -1)
                 ctx = ctx.view(B, 1, -1).repeat(1, beam_size, 1).view(BSZ, -1)
                 g_ent = g_ent.view(B, 1, g_ent.size(1), -1).repeat(1, beam_size, 1, 1).view(BSZ, g_ent.size(1), -1)
                 ent_enc = ent_enc.view(B, 1, ent_enc.size(1), -1).repeat(1, beam_size, 1, 1).view(BSZ, ent_enc.size(1), -1)
@@ -293,7 +324,7 @@ class GraphWriter(nn.Module):
                     _inp = beam_seq[:,:,-1].view(-1)
                     _mask = (_inp>=len(self.text_vocab)).long()
                     xt = replace_ent(beam_seq[:,:,-1].view(-1), ent_enc, len(self.text_vocab), self.tar_emb)
-                    _xt = torch.cat([ctx, xt], 1)
+                    _xt = torch.cat([ctx, xt, vae_z], 1)
                     _h, _c = self.decode_lstm(_xt, (_h, _c))
                     ctx = _h + self.ent_attn(_h, g_ent, mask=ent_mask)
                     _y = torch.cat([_h, ctx], 1)

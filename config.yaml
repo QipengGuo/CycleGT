@@ -6,6 +6,7 @@ g2t:
     head_dim: 128 # dim of each attention head
     weight_decay: 0.0 
     prop: 2 # number of layers of GAT
+    vae_dim: 10
     batch_size: 32
     beam_size: 5
     beam_max_len: 50
