@@ -91,16 +91,20 @@ def prep_model(config, vocab):
     t2g_model = ModelLSTM(relation_types=len(vocab['relation']), d_model=config['t2g']['nhid'], dropout=config['t2g']['drop'])
     return g2t_model, t2g_model
 
+vae_step = 0.
 def train_g2t_one_step(batch, model, optimizer, config):
+    global vae_step
     model.train()
     optimizer.zero_grad()
-    pred, pred_c = model(batch)
+    pred, pred_c, kld_loss = model(batch)
     loss = F.nll_loss(pred.reshape(-1, pred.shape[-1]), batch['tgt'].reshape(-1), ignore_index=0)
     loss = loss #+ 1.0 * ((1.-pred_c.sum(1))**2).mean() #coverage penalty
+    loss = loss + min(1.0, (vae_step+100)/(vae_step+10000)) * 8.0* 1./385 * kld_loss # magic number 
+    vae_step += 1
     loss.backward()
     nn.utils.clip_grad_norm_(model.parameters(), config['clip'])
     optimizer.step()
-    return loss.item()
+    return loss.item(), kld_loss.item()
 
 def train_t2g_one_step(batch, model, optimizer, config, t2g_weight=None):
     model.train()
@@ -141,8 +145,8 @@ def t2g_teach_g2t_one_step(raw_batch, model_t2g, model_g2t, optimizer, config, v
     if len(syn_batch)==0:
         return None
     batch_g2t = batch2tensor_g2t(syn_batch, config['g2t']['device'], vocab)
-    loss = train_g2t_one_step(batch_g2t, model_g2t, optimizer, config['g2t'])
-    return loss
+    loss, kld = train_g2t_one_step(batch_g2t, model_g2t, optimizer, config['g2t'])
+    return loss, kld
 
 def g2t_teach_t2g_one_step(raw_batch, model_g2t, model_t2g, optimizer, config, vocab, t2g_weight=None):
     # train a t2g model with the synthetic input from g2t model
@@ -271,29 +275,29 @@ def warmup_step1(batch_g2t, batch_t2g, model_g2t, model_t2g, optimizerG2T, optim
     batch = batch2tensor_t2g(batch_t2g, config['t2g']['device'], vocab)
     loss1 = train_t2g_one_step(batch, model_t2g, optimizerT2G, config['t2g'], t2g_weight=t2g_weight)
     batch = batch2tensor_g2t(batch_g2t, config['g2t']['device'], vocab)
-    loss2 = train_g2t_one_step(batch, model_g2t, optimizerG2T, config['g2t'])
-    return loss1, loss2
+    loss2, kld = train_g2t_one_step(batch, model_g2t, optimizerG2T, config['g2t'])
+    return loss1, loss2, kld
 
 def warmup_step2(batch_g2t, batch_t2g, model_g2t, model_t2g, optimizerG2T, optimizerT2G, config, t2g_weight, vocab):
     model_g2t.blind, model_t2g.blind = True, False
     _loss1 = g2t_teach_t2g_one_step(batch_t2g, model_g2t, model_t2g, optimizerT2G, config, vocab, t2g_weight=t2g_weight)
     model_g2t.blind, model_t2g.blind = False, True
-    _loss2 = t2g_teach_g2t_one_step(batch_g2t, model_t2g, model_g2t, optimizerG2T, config, vocab)
-    return _loss1, _loss2
+    _loss2, kld = t2g_teach_g2t_one_step(batch_g2t, model_t2g, model_g2t, optimizerG2T, config, vocab)
+    return _loss1, _loss2, kld
 
 def supervise(batch_g2t, batch_t2g, model_g2t, model_t2g, optimizerG2T, optimizerT2G, config, t2g_weight, vocab):
     model_g2t.blind, model_t2g.blind = False, False
     batch = batch2tensor_t2g(batch_t2g, config['t2g']['device'], vocab)
     _loss1 = train_t2g_one_step(batch, model_t2g, optimizerT2G, config['t2g'], t2g_weight=t2g_weight)
     batch = batch2tensor_g2t(batch_g2t, config['g2t']['device'], vocab)
-    _loss2 = train_g2t_one_step(batch, model_g2t, optimizerG2T, config['g2t'])
-    return _loss1, _loss2
+    _loss2, kld = train_g2t_one_step(batch, model_g2t, optimizerG2T, config['g2t'])
+    return _loss1, _loss2, kld
 
 def back_translation(batch_g2t, batch_t2g, model_g2t, model_t2g, optimizerG2T, optimizerT2G, config, t2g_weight, vocab):
     model_g2t.blind, model_t2g.blind = False, False
     _loss1 = g2t_teach_t2g_one_step(batch_t2g, model_g2t, model_t2g, optimizerT2G, config, vocab, t2g_weight=t2g_weight)
-    _loss2 = t2g_teach_g2t_one_step(batch_g2t, model_t2g, model_g2t, optimizerG2T, config, vocab)
-    return _loss1, _loss2
+    _loss2, kld = t2g_teach_g2t_one_step(batch_g2t, model_t2g, model_g2t, optimizerG2T, config, vocab)
+    return _loss1, _loss2, kld
 
 def train(_type, config, load='tmp_vocab.pt'):
     dev_id = 0
@@ -320,7 +324,8 @@ def train(_type, config, load='tmp_vocab.pt'):
 	)
     loss_t2g, loss_g2t = [], []
     best_g2t, best_t2g = 0., 0.
-    
+    klds = []
+
     t2g_weight = [vocab['relation'].wf.get(x, 0) for x in vocab['relation'].i2s]
     t2g_weight[0] = 0
     max_w = max(t2g_weight)
@@ -336,21 +341,22 @@ def train(_type, config, load='tmp_vocab.pt'):
         with tqdm.tqdm(_data, disable=True if not config['main']['display'] else False) as tqb:
             for j, (batch_g2t, batch_t2g) in enumerate(tqb):
                 if i<config['main']['pre_epoch'] and config['main']['mode']=='warm_unsup':
-                    _loss1, _loss2 = warmup_step1(batch_g2t, batch_t2g, model_g2t, model_t2g, optimizerG2T, optimizerT2G, config, t2g_weight, vocab)
+                    _loss1, _loss2, kld = warmup_step1(batch_g2t, batch_t2g, model_g2t, model_t2g, optimizerG2T, optimizerT2G, config, t2g_weight, vocab)
                 if i==config['main']['pre_epoch']+1 and config['main']['mode']=='warm_unsup':
-                    _loss1, _loss2 = warmup_step2(batch_g2t, batch_t2g, model_g2t, model_t2g, optimizerG2T, optimizerT2G, config, t2g_weight, vocab)
+                    _loss1, _loss2, kld = warmup_step2(batch_g2t, batch_t2g, model_g2t, model_t2g, optimizerG2T, optimizerT2G, config, t2g_weight, vocab)
                 if config['main']['mode']=='sup':
-                    _loss1, _loss2 = supervise(batch_g2t, batch_t2g, model_g2t, model_t2g, optimizerG2T, optimizerT2G, config, t2g_weight, vocab)
+                    _loss1, _loss2, kld = supervise(batch_g2t, batch_t2g, model_g2t, model_t2g, optimizerG2T, optimizerT2G, config, t2g_weight, vocab)
                 if (i>=config['main']['pre_epoch']+1 and config['main']['mode']=='warm_unsup') or (config['main']['mode']=='cold_unsup'):
-                    _loss1, _loss2 = back_translation(batch_g2t, batch_t2g, model_g2t, model_t2g, optimizerG2T, optimizerT2G, config, t2g_weight, vocab)
+                    _loss1, _loss2, kld = back_translation(batch_g2t, batch_t2g, model_g2t, model_t2g, optimizerG2T, optimizerT2G, config, t2g_weight, vocab)
                 loss_t2g.append(_loss1)
                 schedulerT2G.step()
                 loss_g2t.append(_loss2)
                 schedulerG2T.step()
-                tqb.set_postfix({'t2g loss': np.mean(loss_t2g), 'g2t loss': np.mean(loss_g2t)})
+                klds.append(kld)
+                tqb.set_postfix({'t2g loss': np.mean(loss_t2g), 'g2t loss': np.mean(loss_g2t), 'kld loss': np.mean(klds)})
 
         logging.info('Epoch '+str(i))
-        if i%5==0:
+        if i%1==0:
             if i<config['main']['pre_epoch'] and config['main']['mode']=='warm_unsup':
                 model_g2t.blind, model_t2g.blind = True, True
             else:
@@ -395,7 +401,7 @@ def multi_run():
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
 
-        vocab= prep_data(config['main'])
+        vocab = prep_data(config['main'])
         torch.save({'vocab':vocab}, 'tmp_vocab.pt'+str(config['main']['seed']))
         train('train', config, load='tmp_vocab.pt'+str(config['main']['seed']))
 
@@ -412,7 +418,7 @@ def main():
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-    vocab= prep_data(config['main'])
+    vocab = prep_data(config['main'])
     torch.save({'vocab':vocab}, 'tmp_vocab.pt')
     train('train', config)
 
