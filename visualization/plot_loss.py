@@ -1,7 +1,7 @@
 import numpy as np
 import seaborn as sns
 
-file = 'temp.npz'
+file = 'loss_synthetic_images.npz'
 a = np.load(file)
 
 num = 20
