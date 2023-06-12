@@ -2,6 +2,6 @@ PyYAML
 tqdm
 dgl-cu100==0.4.2
 numpy
-transformers==2.3.0
+transformers==4.30.0
 scikit-learn==0.22
 git+git://github.com/salaniz/pycocoevalcap
